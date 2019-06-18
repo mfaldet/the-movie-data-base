@@ -1,0 +1,737 @@
+---
+title: "TMDB Analysis"
+author: "Team B"
+date: "April 26, 2019"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Import
+
+```{r import}
+original_train <- read.csv("train.csv")
+original_test <- read.csv("test.csv")
+train <- original_train
+test <- original_test
+```
+
+
+## Library 
+
+```{r Tidy Library, message=FALSE, warning=FALSE}
+## Load tidy tools
+library(tidyverse)    #dplyr, tidyr, ggplot2, purrr, stringr, tibble, readr, forcats
+library(lubridate)
+library(purrr)
+library(sentimentr) #https://towardsdatascience.com/sentiment-analysis-in-r-good-vs-not-good-handling-negations-2404ec9ff2ae
+library(Amelia)
+library(mlbench)
+```
+
+
+```{r tidy text}
+colnames(train)[1] <- "id"
+colnames(test)[1] <- "id"
+
+train <- train %>% select(id, budget, runtime, popularity, release_date, 
+                          status, original_language, overview, tagline, 
+                          original_title, title, belongs_to_collection, genres,
+                          homepage, production_companies, production_countries, 
+                          spoken_languages, Keywords, cast, crew, revenue)
+test <- test %>% select(id, budget, runtime, popularity, release_date, 
+                          status, original_language, overview, tagline, 
+                          original_title, title, belongs_to_collection, genres,
+                          homepage, production_companies, production_countries, 
+                          spoken_languages, Keywords, cast, crew)
+```
+
+
+## Release Data
+
+```{r}
+#mark date with lubridate (now ordered yyyy-mm-dd)
+train$release_date <- mdy(train$release_date)
+test$release_date <- mdy(test$release_date)
+```
+
+
+## Status
+
+```{r}
+#change status to 0(released), or 1(rumored)
+train <- train %>% mutate(status = factor(if_else(status == "Released", 0, 1)))
+test <- test %>% mutate(status = factor(if_else(status == "Released", 0, 1)))
+```
+
+
+## Homepage
+
+```{r}
+#homepage is 1 if they have one, most don't
+train <- train %>% mutate(homepage = factor(if_else(is.na(homepage) == TRUE, 0, 1)))
+test <- test %>% mutate(homepage = factor(if_else(is.na(homepage) == TRUE, 0, 1)))
+```
+it appears everyone has a homepage. We could possible measure homepage length... but it seems to not offer useful information for a model, so we'll discard this variable.
+
+```{r}
+train <- train %>% select(-homepage)
+test <- test %>% select(-homepage)
+```
+
+
+## Titles
+```{r}
+#create title_change to see if original changed before showing, and delete both old columns
+train$title <- as.character(train$title)
+train$original_title <- as.character(train$original_title)
+train <- train %>% mutate(title_change = factor(if_else(original_title == title, 0, 1)))
+
+test$title <- as.character(test$title)
+test$original_title <- as.character(test$original_title)
+test <- test %>% mutate(title_change = factor(if_else(original_title == title, 0, 1))) %>% 
+                 select(-title, -original_title)
+```
+
+
+## Overview
+
+```{r}
+#run overview and tagline through a text analysis for a numeric value sentiment score
+train_overview <- as.character(train$overview)
+#apply sentiment analysis to each sentence of the overview
+overview <- lapply(train_overview, sentiment)
+#sum the vector of sentiment-score for each item in the list (sum each sentence score of each overview)
+ov <- sapply(overview, function (x) sum(unlist(x)))
+#append list over overview on dataframe
+train$overview <- as.numeric(ov)
+
+test_overview <- as.character(test$overview)
+test.overview <- lapply(test_overview, sentiment)
+test.ov <- sapply(test.overview, function (x) sum(unlist(x)))
+test$overview <- as.numeric(test.ov)
+```
+
+
+## Tagline
+
+```{r}
+train_tagline <- as.character(train$tagline)
+tagline <- lapply(train_tagline, sentiment)
+tl <- sapply(tagline, function (x) sum(unlist(x)))
+train$tagline <- as.numeric(tl)
+
+test_tagline <- as.character(test$tagline)
+test.tagline <- lapply(test_tagline, sentiment)
+test.tl <- sapply(test.tagline, function (x) sum(unlist(x)))
+test$tagline <- as.numeric(test.tl)
+```
+
+
+## Preprocessing and sneak peek of the data
+The way I've decided to go about this problem is to extract the data, split the string, name each element and put everything in a df
+for each "JSON" column.
+
+## Production Countries
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+production_countries_list <- list()
+for (i in seq_along(train$production_countries)) {
+  production_countries_list[[i]] <- train$production_countries[[i]] %>%
+    str_extract_all('(?<=\\{).*?(?=\\})') %>% 
+    str_split("(?<=[:digit:]|[:punct:]), ",n=Inf,simplify = TRUE) %>% 
+    str_extract_all('(?<=\\:[:space:]).*') %>% 
+    str_replace_all("[:punct:]","") %>% 
+    matrix( ncol = 2,  byrow = TRUE, dimnames=list(c(),
+                                                  c("id","name"))) %>% 
+    as_tibble(stringsAsFactors = FALSE)
+}
+
+names(production_countries_list) <- c(1:3000)
+
+production_countries_df <- bind_rows(production_countries_list, .id = 'movie_id')
+
+head(production_countries_df, 10)
+```
+
+
+## Spoken Language
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+spoken_language_list <- list()
+for (i in seq_along(train$spoken_language)) {
+  spoken_language_list[[i]] <- train$spoken_language[[i]] %>%
+    str_extract_all('(?<=\\{).*?(?=\\})') %>% 
+    str_split("(?<=[:digit:]|[:punct:]), ",n=Inf,simplify = TRUE) %>% 
+    str_extract_all('(?<=\\:[:space:]).*') %>% 
+    str_replace_all("[:punct:]","") %>% 
+    matrix( ncol = 2,  byrow = TRUE, dimnames=list(c(),
+                                                  c("id","name"))) %>% 
+    as_tibble(stringsAsFactors = FALSE)
+}
+
+names(spoken_language_list) <- c(1:3000)
+
+spoken_language_df <- bind_rows(spoken_language_list, .id = 'movie_id')
+```
+
+
+## Genres
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+genres_list <- list()
+for (i in seq_along(train$genres)) {
+  genres_list[[i]] <- train$genres[[i]] %>%
+    str_extract_all('(?<=\\{).*?(?=\\})') %>% 
+    str_split("(?<=[:digit:]|[:punct:]), ",n=Inf,simplify = TRUE) %>% 
+    str_extract_all('(?<=\\:[:space:]).*') %>% 
+    str_replace_all("[:punct:]","") %>% 
+    matrix( ncol = 2,  byrow = TRUE,dimnames=list(c(),
+                                                  c("id","name"))) %>% 
+    as_tibble(stringsAsFactors = FALSE)
+}
+
+names(genres_list) <- c(1:3000)
+
+genres_df <- bind_rows(genres_list, .id = 'movie_id')
+```
+
+
+## Production companies
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+production_companies_list <- list()
+for (i in seq_along(train$production_companies)) {
+  production_companies_list[[i]] <- train$production_companies[[i]] %>%
+    str_extract_all('(?<=\\{).*?(?=\\})') %>% 
+    str_split("(?<=[:digit:]|[:punct:]), ",n=Inf,simplify = TRUE) %>% 
+    str_extract_all('(?<=\\:[:space:]).*') %>% 
+    str_replace_all("[:punct:]","") %>% 
+    matrix( ncol = 2,  byrow = TRUE,dimnames=list(c(),
+                                                  c("name","id"))) %>% 
+    as_tibble(stringsAsFactors = FALSE)
+}
+
+names(production_companies_list) <- c(1:3000)
+
+production_companies_df <- bind_rows(production_companies_list, .id = 'movie_id')
+```
+
+
+## Cast
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+cast_list <- list()
+
+for (i in seq_along(train$cast)) {
+  cast_list[[i]] <- train$cast[[i]] %>%
+    str_extract_all('(?<=\\{).*?(?=\\})') %>%  #extract everything between {}
+    str_split("(?<=[:digit:]|[:punct:]), ",
+              n=Inf,simplify = TRUE) %>%       #split on ","
+    str_extract_all('(?<=\\:[:space:]).*') %>% #get the part after the semicolon
+    str_replace_all("'|\"","") %>% #clean the unwanted punctuation
+    matrix( ncol = 8,  byrow = TRUE,dimnames=list(c(),
+                                                  c("cast_id","character","credit_id","gender","id",
+                                                    "name","order","profile_path"))) %>% #convert to matrix
+    as_tibble(stringsAsFactors = FALSE)#convert the matrix to tibble
+}
+
+# Name the list
+names(cast_list) <- c(1:3000) #name the list with the sequential number of the list element
+
+# Create df with a column that identifies each movie
+cast_df <- bind_rows(cast_list, .id = 'movie_id')#create single df with a column that identifies the movies
+```
+
+
+## Crew
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+crew_list <- list()
+
+for (i in seq_along(train$crew)) {
+  crew_list[[i]] <- train$crew[[i]] %>%
+    str_extract_all('(?<=\\{).*?(?=\\})') %>% 
+    str_split("(?<=[:digit:]|[:punct:]), ",n=Inf,simplify = TRUE) %>% 
+    str_extract_all('(?<=\\:[:space:]).*') %>% 
+    str_replace_all("[:punct:]","") %>% 
+    matrix( ncol = 7,  byrow = TRUE,dimnames=list(c(),
+   c("credit_id","department","gender","id","job","name","profile_path"))) %>% 
+    as_tibble(stringsAsFactors = FALSE)
+}
+
+names(crew_list) <- c(1:3000)
+
+crew_df <- bind_rows(crew_list, .id = 'movie_id')
+```
+
+
+# Handling Missing Values
+
+```{r}
+summary(train$runtime)
+
+## 2 missing runtimes, impute average
+train$runtime[is.na(train$runtime)] <- round(mean(train$runtime, na.rm = TRUE))
+
+summary(train$overview)
+
+## 12 missing overviews, fill with 0
+train$overview[is.na(train$overview)] <- 0
+
+summary(train$tagline)
+
+## Many missing (12% pop.) and range 2.5 to 69... fill with 0?
+train$tagline[is.na(train$tagline)] <- 0
+```
+
+```{r}
+missmap(train, col=c("blue", "red"), legend=FALSE)
+```
+Lucky for us we have no more missing values.
+
+# Summarize 
+
+```{r}
+train <- train %>% select(budget, runtime, popularity, release_date, 
+                          status, original_language, title_change,
+                          overview, tagline, revenue)
+
+test <- test %>% select(budget, runtime, popularity, release_date, 
+                          status, original_language, title_change,
+                          overview, tagline)
+
+head(train)
+```
+
+
+## Variables with multiple columns: Spoken_Language, Genres, Production Companies, Production Countries
+#take genre for example, we could dummify the data to be multiple columns, each 1 or 0 if they have that genre
+```{r}
+summary(factor(genres_df$name))
+```
+
+#however this would create 20 columns for genres alone, and the other three vars have even more options of factors. 
+#looking at spoken languages, it is possible we could create columns for just the top 5 most popular languages?
+```{r}
+summary(factor(spoken_language_df$name))
+```
+
+
+## Variable Dataframes to join onto:
+```{r}
+head(crew_df)
+head(cast_df)
+```
+
+# END OF TIDY ############################
+
+
+
+
+
+
+```{r setup, include=FALSE}
+library(ggformula)
+library(ISLR)
+library(corrplot)
+library(e1071)
+library(caret)
+library(randomForest)
+library(gbm)
+```
+
+# Chapter 8 Question 12 (this is the premises for our final project)
+Apply boosting, bagging, and random forests to a data set of your choice. Be sure to fit the models on a 
+training set and to evaluate their performance on a test set. How accurate are the results compared 
+to simple methods like linear or logistic regression? Which of these approaches yields the best performance?
+
+TO DO:
+1. Graphical Analysis
+2. Run simple linear regression
+3. Apply bagging
+4. Apply random forests
+5. Apply boosting
+6. Evaluate all models from training set on test set
+7. Compare accuracy of (2-3) with (4-6)
+8. Discuss which approach we think is the best
+
+
+Before we begin building the regression model, it is a good practice to analyze and understand the variables. The graphical analysis and correlation study below will help with this.
+
+# 1 Graphical Analysis
+
+```{r}
+## Correlation plot
+train %>% select_if(is.numeric) %>% cor() %>% corrplot(method = "circle")
+```
+Notice budget is highly correlated with revenue, and will be our best predictor.
+
+```{r}
+scatter.smooth(x=train$budget, y=train$revenue, main="Revenue ~ Budget")  # scatterplot
+```
+Though they don't appear incredibly accurate, there's a general trend. More budget leads to a more volatile expected revenue; but a low budget spells a lower revenue.
+
+```{r, message=FALSE, warning=FALSE}
+par(mfrow=c(1, 2))  # divide graph area in 2 columns
+boxplot(train$budget, main="Budget")  # box plot for 'budget'
+boxplot(train$revenue, main="Revenue")  # box plot for 'revenue'
+```
+An outlier is considered any datapoint ourside of a 1.5 Inter Quartile Range (the distance from 25% to 75%). As you can see above, there are a vast amount of outliers; all lying above. We may consider taking the log of budget and revenue.
+
+```{r, warning=FALSE}
+par(mfrow=c(1, 2))  # divide graph area in 2 columns
+plot(density(train$budget), main="Density Plot: Budget", ylab="Frequency", sub=paste("Skewness:",
+                          round(e1071::skewness(train$budget), 2)))  # density plot for 'budget'
+polygon(density(train$budget), col="red")
+plot(density(train$revenue), main="Density Plot: Revenue", ylab="Frequency", sub=paste("Skewness:", 
+                         round(e1071::skewness(train$revenue), 2)))  # density plot for 'revenue'
+polygon(density(train$revenue), col="red")
+```
+And as expected, both heavily skewed.
+
+
+```{r}
+summary(log(1+train$budget))
+```
+
+```{r, warning=FALSE, message=FALSE}
+scatter.smooth(x=log(1+train$budget), y=train$revenue, main="Revenue ~ Budget_log")  # scatterplot
+
+par(mfrow=c(1, 2))  # divide graph area in 2 columns
+boxplot(log(1+train$budget), main="Budget_log")  # box plot for 'budget_log'
+boxplot(log(1+train$revenue), main="Revenue_log")  # box plot for 'revenue_log'
+
+par(mfrow=c(1, 2))  # divide graph area in 2 columns
+plot(density(log(1+train$budget)), main="Density Plot: Budget_log", ylab="Frequency", sub=paste("Skewness:",
+                          round(e1071::skewness(log(1+train$budget)), 2)))  # density plot for 'budget_log'
+    polygon(density(log(1+train$budget)), col="red")
+plot(density(log(1+train$revenue)), main="Density Plot: Revenue_log", ylab="Frequency", sub=paste("Skewness:", 
+                          round(e1071::skewness(log(1+train$revenue)), 2)))  # density plot for 'revenue_log'
+    polygon(density(log(1+train$revenue)), col="red")
+```
+This is incredibly interesting. 
+It seems there's outlier's in revenue even if you log it. It's got a consistent huge spread, but there's a higher chance to be an outlier if youhave a large budget.
+
+
+```{r}
+## Correlation plot
+train %>% mutate(budget_log = log(1+budget)) %>% select_if(is.numeric) %>% cor() %>% corrplot(method = "circle")
+pairs(train, col=train$revenue)
+```
+
+
+# 2 Simple Linear Regression
+```{r}
+#Set seed for replication
+set.seed(1)
+
+## Formula
+Form <- as.formula("revenue ~ budget + runtime + popularity + overview + tagline + release_date + status + title_change")
+Form_log <- as.formula("revenue ~ log(1+budget) + runtime + popularity + overview + tagline + release_date + status + original_language + title_change")
+
+## Model
+linearMod <- lm(Form, train)
+linearLogMod <- lm(Form_log, train)
+
+## Predict (in-sample)
+linearMod.preds <- predict(linearMod, type="response")
+linearLogMod.preds <- predict(linearLogMod, type="response")
+
+## Plot MSE
+plot(linearMod.preds, train$revenue)
+abline(0,1)
+plot(linearLogMod.preds, train$revenue)
+abline(0,1)
+
+## Record Accuracy
+MSE1 <- mean((linearMod.preds - train$revenue)^2)
+MSE1_log <- mean((linearLogMod.preds - train$revenue)^2)
+
+## Record Variable Importance
+importance1 <- linearMod$importance
+importance1_log <- linearLogMod$importance
+
+## Create train and test sets
+train$train_test <- rbinom(nrow(train), 1, .70)
+trainingSet <- subset(train, train_test==1)
+testingSet <- subset(train, train_test==0)
+trainingSet <- trainingSet %>% select(-train_test)
+testingSet <- testingSet %>% select(-train_test)
+
+## Out of Sample
+linMod <- glm(Form, trainingSet, family=gaussian)
+linLogMod <- glm(Form_log, trainingSet, family=gaussian)
+
+linMod.preds <- predict(linMod, newdata=testingSet, type="response")
+linLogMod.preds <- predict(linLogMod, newdata=testingSet, type="response")
+
+plot(linMod.preds, testingSet$revenue)
+abline(0,1)
+plot(linLogMod.preds, testingSet$revenue)
+abline(0,1)
+
+MSE2 <- mean((linMod.preds - testingSet$revenue)^2)
+MSE2_log <- mean((linLogMod.preds - testingSet$revenue)^2)
+
+importance2 <- linMod$importance
+importance2_log <- linLogMod$importance
+```
+
+
+# 3. Bagging
+
+```{r}
+## Bagging the Boston dataset (can be found in MASS library)
+## bagging is just special case of random forest where m = p
+set.seed(1)
+
+#mtry=10 means that all 10 predictors are considered @ each tree split
+bag.rf <- randomForest(Form, data=train, mtry=10, importance =TRUE, ntree=100)
+bag.preds <- predict(bag.rf, type="response")
+plot(bag.preds, train$revenue)
+abline(0,1)
+MSE3 <- mean((bag.preds - train$revenue)^2)
+importance3 <- bag.rf$importance
+varImpPlot(bag.rf)
+
+## Out of sample
+bagMod.rf <- randomForest(Form, data=trainingSet, mtry=10, importance =TRUE, ntree=100)
+bagMod.preds <- predict(bagMod.rf, newdata=testingSet, type="response")
+plot(bagMod.preds, testingSet$revenue)
+abline(0,1)
+MSE4 <- mean((bagMod.preds - testingSet$revenue)^2)
+importance4 <- bagMod.rf$importance
+```
+
+# 4. Boosting
+
+```{r}
+## Bagging the Boston dataset (can be found in MASS library)
+## bagging is just special case of random forest where m = p
+set.seed(1)
+
+Formula <- as.formula("revenue ~ budget + runtime + popularity + overview + tagline + status + original_language + title_change")
+
+#mtry=10 means that all 10 predictors are considered @ each tree split
+brt <- gbm(Formula, data=train, distribution="gaussian", n.trees=5000, interaction.depth=10)
+brt.preds <- predict(brt, n.trees=5000, type="response")
+plot(brt.preds, train$revenue)
+abline(0,1)
+MSE5 <- mean((brt.preds - train$revenue)^2)
+
+
+## Out of sample
+brtMod <- gbm(Formula, data=trainingSet, distribution="gaussian", n.trees=5000, interaction.depth=10)
+brtMod.preds <- predict(brtMod, newdata=testingSet, n.trees=5000, type="response")
+plot(brtMod.preds, testingSet$revenue)
+abline(0,1)
+MSE6 <- mean((brtMod.preds - testingSet$revenue)^2)
+```
+
+```{r}
+cbind(MSE1, MSE2, MSE3, MSE4, MSE5, MSE6)
+```
+
+
+
+# 5. Predictions
+
+```{r}
+set.seed(1)
+
+bagF.preds <- predict(linearMod, newdata=test, type="response")
+```
+
+
+```{r Create Answer CSV}
+write.csv(bagF.preds, file="submission.csv")
+```
+
+
+save(train, file = "train.Rdata")
+save(trainingSet, file = "trainingSet.Rdata")
+save(testingSet, file = "testingSet.Rdata")
+
+load(file="data.Rdata")
+
+#Everything below this line is notes based on the book/me trying to understand bagging, boosting, & random forest
+I will take this out when we start the analysis, but wanted to put it here if anyone wants to reference it
+
+#In a later section I included code examples for each method
+
+Advantages of Forests: pg. 317 
+- Some people believe that decision trees more closely mirror human
+decision-making than do the regression and classification approaches
+seen in previous chapters.
+- Trees can be displayed graphically, and are easily interpreted even by
+a non-expert (especially if they are small).
+- Trees can easily handle qualitative predictors without the need to
+create dummy variables.
+
+Issues with Forests:
+- Unfortunately, trees generally do not have the same level of predictive
+accuracy as some of the other regression and classification approaches
+seen in this book.
+- Additionally, trees can be very non-robust. In other words, a small
+change in the data can cause a large change in the final estimated
+tree.
+- However, by aggregating many decision trees, using methods like bagging,
+random forests, and boosting, the predictive performance of trees can be
+substantially improved.
+
+
+#Bagging Basics:
+- decision trees have high variance
+    - not very repeatable results with different splits in data set
+    - linear regression usally = opposite (low variance)
+- Bagging = bootstrap aggregation
+    - method to reduce variance
+    - main principle: averaging set of observations = lower variance
+    - Procedure 1: 
+        1. Split pop. into multiple training sets
+        2. Build prediction model on each set
+        3. Average predictions
+    **Not very practical bc usually don't have enough for multiple training sets so use procedure 2
+    - Procedure 2:
+        1. Take repeated samples from 1 training set = n boostrapped sets
+        2. train model on n sets 
+        3. average predicitons 
+    **For qualitative data as output, need to use a majority votes to record prediction
+    **Use Out-Of-Bag for Error estimate
+    - Interpreting results
+    - (regression trees) record total amount RSS decreases due to splits over given predictor, averaged over all trees
+        - large value = important predictor
+    - (classification trees) add up Gini index, decreased by splits over predictor and average over all trees
+        - variables with largest mean decrease = important
+    **Improves accuracy, but hard to interpret
+lab pg. 329
+
+#Random Forests pg. 319
+    - benefit over bagged trees = decorrelates trees
+    - same as before build trees on bootstrapped training sample
+    - Main difference: random sample of predictors used @ each split
+        - full set of predictors = p
+        - random sample of predictors = m 
+        - m roughly = sqrt(p)
+    - bagged trees suffer from one strong predictor (or a few) being used high in each tree = high correlation
+    - RF solves this using m
+    * When lots of predictors are correlated using small m is helpful
+    - using lots of trees (B) not likely to overfit
+
+# Boosting pg. 321
+    *main dif. between bagging & boosting is that trees are grown sequentially
+        - meaning each tree uses info from previous trees
+        - NOT bootstrapped; each tree is fit of mod. version of original d
+        - trees are fitted to residuals & not response Y
+    *benefit = learns slowly so less chance of overfitting
+    - tuning parameters
+        1. num trees = B
+            - CAN overfit if B is too big --> use cross-validation to select B
+        2. lambda = shrinkage parameter
+            - controls rate of learning 
+            - range 0.01 to 0.001 (depends on prob)
+            - the smaller the lambda the larger the B has to be
+        3. d = num of splits in a tree 
+            - controls complexity & is interaction depth
+            - d = 1 usually works --> creates stump (tree with only 1 split)
+    * typically easier than bag/RF to interpret bc of the stumps
+
+
+# Code for Bagging
+
+
+## Bagging the Boston dataset (can be found in MASS library)
+## bagging is just special case of random forest where m = p
+## bc of this we can use the randomForest() package in r
+
+library( randomForest)
+set.seed(1)
+
+#mtry=13 means that all 13 predictors are considered @ each tree split
+bag.boston= randomForest( medv∼.,data=Boston , subset=train , mtry=13,importance =TRUE)
+
+bag.boston
+
+#Seeing how well the model performs
+yhat.bag = predict (bag.boston , newdata=Boston[-train ,])
+plot(yhat.bag , boston .test)
+abline (0,1)
+mean((yhat.bag -boston .test)^2) 
+# the MSE for this model is better (smaller) than a single tree
+
+#to change num of trees grown (B) use ntree
+bag.boston2 = randomForest( medv∼.,data=Boston , subset=train , mtry=13,ntree=25)
+yhat.bag2 = predict (bag.boston2 , newdata=Boston[-train ,])
+mean((yhat.bag2 -boston .test)^2)
+
+
+# Code for Random Forest
+
+
+# pretty much same as bagging except use less predictors (mtry)
+# RF defaults to using p(total num predictors)/3 for regression and sqrt(p) for classification
+
+# In this example they use mtry = 6 
+
+library(randomForest)
+ set.seed(1)
+rf.boston= randomForest(medv∼.,data=Boston , subset=train , mtry=6, importance =TRUE)
+yhat.rf = predict(rf.boston ,newdata=Boston[-train ,])
+mean((yhat.rf-boston.test)^2)
+
+#This results in MSE that's smaller than bagged model, so this is improvement
+
+# Can view importance of variables by using function importance()
+importance (rf.boston)
+# function displays 2 measures: %IncMSE and IncNodePurity
+# %IncMSE comes from "mean decrease of accuracy in predictions on OOB samples when that variable is excluded"
+# IncNodePurity is "total decrease in node impurity from splits over variable, averaged over all trees"
+# the larger the 2 measures are, the more important the variable is
+
+#to plot variable importance measures use varImpPlot()
+varImpPlot(rf.boston)
+
+
+# Code for Boosting
+
+
+# Boosting on the Boston dataset
+#use the package gbm for boosting
+
+library (gbm)
+set.seed(1)
+boost.boston=gbm(medv∼.,data=Boston[train ,], distribution= "gaussian ",n.trees=5000, interaction .depth=4)
+# Here we use distribution = "gaussian" bc this is regression prob
+    #for classification prob use distribution = "bernoulli"
+#use n.trees= to set the number of trees
+#limit the depth of each tree with interaction.depth=
+
+summary(boost.boston)
+#use summary to see influence plot and relative influence stats
+# most important variables are ones with highest rel.inf
+# in this case most important are rm and lstat
+# can also make partial dependence plots -> show marginal effect of selected vars on response after integrating out other vars
+par(mfrow=c(1,2))
+plot(boost.boston ,i="rm")
+plot(boost.boston ,i=" lstat")
+#results here show that median house prices increase with rm and decrease with lstat
+
+#Using the model to predict the outcome on the test set
+yhat.boost=predict (boost.boston ,newdata =Boston[-train ,],n.trees=5000)
+mean((yhat.boost - boston.test)^2)
+# Resulting MSE is similar to MSE for RF (so still better than the bagging model)
+
+#Can use different shrinkage parameter (lambda)
+    #Remember that the default is 0.001
+# Here using lambda = 0.2
+boost.boston=gbm(medv∼.,data=Boston[train ,], distribution= "gaussian ",n.trees =5000, interaction .depth =4, shrinkage =0.2, verbose=F)
+yhat.boost=predict (boost.boston ,newdata =Boston[-train ,], n.trees=5000)
+mean((yhat.boost - boston.test)^2)
+#Resulting MSE is smaller than before 
+
